@@ -129,6 +129,7 @@
                     class="w-full p-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition text-sm"></textarea>
             </div>
 
+            <!-- Question 2 -->
             <div class="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 card-shadow">
                 <label class="block font-semibold text-slate-800 text-base mb-3">
                     <span class="inline-block w-7 h-7 bg-emerald-100 text-emerald-800 text-center rounded-full text-sm leading-7 mr-2 font-bold">2</span>
@@ -289,6 +290,20 @@
         </div>
     </div>
 
+    <div id="resetModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden no-print">
+        <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl text-center space-y-4">
+            <div class="w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto text-xl">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+            </div>
+            <h3 class="text-lg font-bold text-slate-800">Reset Isian Formulir?</h3>
+            <p class="text-sm text-slate-600">Semua jawaban yang telah diisi dan tersimpan di perangkat ini akan dihapus.</p>
+            <div class="flex items-center justify-center gap-3 pt-2">
+                <button onclick="closeResetModal()" class="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-sm font-medium hover:bg-slate-200 transition">Batal</button>
+                <button onclick="confirmResetForm()" class="px-4 py-2 bg-rose-600 text-white rounded-xl text-sm font-semibold hover:bg-rose-700 transition">Ya, Hapus Semua</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Notification Toast -->
     <div id="toast" class="fixed top-5 right-5 bg-slate-900 text-white px-4 py-3 rounded-xl shadow-xl z-50 text-sm transform translate-y-[-100px] opacity-0 transition-all duration-300 flex items-center gap-2">
         <i id="toastIcon" class="fa-solid fa-check-circle text-emerald-400"></i>
@@ -298,6 +313,7 @@
     <script>
         const DEFAULT_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxgAOtCgq7xjTQdGRpQHIbkQ17uB9Um9G4yz4jbzd-_L78ue0_k9udYf9q4mpPIeCeZwQ/exec';
         const fields = ['studentName', 'studentClass', 'submissionDate', 'q1', 'q3', 'q4', 'q5', 'q6', 'q7_action', 'q7_reason'];
+        let lastEvaluationResult = null;
         
         document.addEventListener("DOMContentLoaded", () => {
             const dateInput = document.getElementById('submissionDate');
@@ -330,6 +346,125 @@
                 });
             });
         });
+
+        async function evaluateCriticalThinking(data) {
+            const apiKey = "";
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+
+            const prompt = `
+Bertindaklah sebagai evaluator pembelajaran berpikir kritis TIK SMA/MA Kelas XI.
+Evaluasi jawaban siswa berikut terkait materi "HP di Sekolah":
+
+Siswa: ${data.studentName} (${data.studentClass})
+1. Masalah Utama: "${data.q1}"
+2. Pendapat HP: "${data.q2}"
+3. Alasan Pilihan: "${data.q3}"
+4. Akibat HP di Kelas: "${data.q4}"
+5. Solusi: "${data.q5}"
+6. Aturan Kepala Madrasah: "${data.q6}"
+7. Kesimpulan: Sebaiknya "${data.q7_action}" karena "${data.q7_reason}"
+
+Tugas:
+Analisis tingkat berpikir kritis siswa (skor 0-100) dan berikan saran ringkas.
+Kembalikan respon HANYA dalam format JSON valid berikut:
+{
+  "score": 85,
+  "category": "Sangat Kritis",
+  "statusIcon": "fa-award",
+  "statusColor": "emerald",
+  "rubric": {
+    "identifikasi": 23,
+    "argumentasi": 21,
+    "solusi": 20,
+    "sintesis": 21
+  },
+  "verdict": "Siswa sudah menunjukkan pola berpikir kritis yang terstruktur...",
+  "strengths": "Mampu memberikan alasan logis dan solusi yang relevan.",
+  "suggestions": "Pertahankan argumentasi yang baik dan perjelas dampak praktisnya."
+}
+Kategori yang tersedia: "Sangat Kritis" (80-100), "Cukup Kritis" (60-79), "Perlu Ditingkatkan" (<60).
+`;
+
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: prompt }] }],
+                        generationConfig: { responseMimeType: "application/json" }
+                    })
+                });
+
+                const result = await response.json();
+                const jsonText = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (jsonText) {
+                    return JSON.parse(jsonText);
+                }
+            } catch (e) {
+                console.warn("AI Evaluation fallback to rubric algorithm:", e);
+            }
+
+            // Fallback Algoritma Rubrik jika offline/tanpa API
+            return calculateRuleBasedScore(data);
+        }
+
+        function calculateRuleBasedScore(data) {
+            let score = 0;
+            const rubrics = { identifikasi: 0, argumentasi: 0, solusi: 0, sintesis: 0 };
+            
+            const q1Len = (data.q1 || '').trim().length;
+            if (q1Len > 40) rubrics.identifikasi = 23;
+            else if (q1Len > 15) rubrics.identifikasi = 17;
+            else if (q1Len > 0) rubrics.identifikasi = 10;
+
+            const q3 = (data.q3 || '').toLowerCase();
+            let argScore = Math.min(15, q3.length / 3);
+            if (q3.includes('karena') || q3.includes('sebab') || q3.includes('alasan')) argScore += 5;
+            if (q3.includes('dampak') || q3.includes('contoh') || q3.includes('namun')) argScore += 5;
+            rubrics.argumentasi = Math.min(25, Math.round(argScore));
+
+            const q4Len = (data.q4 || '').trim().length;
+            const q5Len = (data.q5 || '').trim().length;
+            let solScore = Math.min(15, (q4Len + q5Len) / 5);
+            if ((data.q5 || '').toLowerCase().includes('aturan') || (data.q5 || '').toLowerCase().includes('jadwal') || (data.q5 || '').toLowerCase().includes('fokus')) solScore += 8;
+            rubrics.solusi = Math.min(25, Math.round(solScore));
+
+            const q6Len = (data.q6 || '').trim().length;
+            const q7Len = ((data.q7_action || '') + (data.q7_reason || '')).trim().length;
+            let sinScore = Math.min(15, (q6Len + q7Len) / 4);
+            if ((data.q7_reason || '').toLowerCase().includes('karena') || (data.q7_reason || '').toLowerCase().includes('agar')) sinScore += 8;
+            rubrics.sintesis = Math.min(25, Math.round(sinScore));
+
+            score = rubrics.identifikasi + rubrics.argumentasi + rubrics.solusi + rubrics.sintesis;
+
+            let category = "Perlu Ditingkatkan";
+            let statusIcon = "fa-seedling";
+            let statusColor = "amber";
+            let verdict = "Siswa masih dalam tahap berkembang. Disarankan untuk memperdalam alasan dan menyertakan kata kunci argumen (seperti 'karena' atau 'akibatnya').";
+
+            if (score >= 80) {
+                category = "Sangat Kritis";
+                statusIcon = "fa-award";
+                statusColor = "emerald";
+                verdict = "Siswa telah menunjukkan pola berpikir kritis yang sangat baik, mampu mengidentifikasi masalah, menganalisis dampak, serta memberikan solusi dan kesimpulan secara logis.";
+            } else if (score >= 60) {
+                category = "Cukup Kritis";
+                statusIcon = "fa-lightbulb";
+                statusColor = "sky";
+                verdict = "Siswa sudah cukup memahami masalah dan menyampaikan gagasan, namun argumentasi dapat ditambahkan dengan fakta atau alasan yang lebih rinci.";
+            }
+
+            return {
+                score,
+                category,
+                statusIcon,
+                statusColor,
+                rubric: rubrics,
+                verdict,
+                strengths: score >= 60 ? "Sudah mampu mengemukakan pendapat pribadi dengan baik." : "Sudah berpartisipasi menjawab seluruh soal.",
+                suggestions: score < 80 ? "Sertakan kata kunci argumen ('karena', 'dampaknya', 'solusinya') untuk memperkuat argumen kamu." : "Pertahankan cara berpikir kritis kamu dan cobalah melihat masalah dari sudut pandang yang lebih luas."
+            };
+        }
 
         function updateProgress() {
             let completed = 0;
@@ -392,20 +527,29 @@
         }
 
         function resetForm() {
-            if (confirm("Apakah Anda yakin ingin mengosongkan semua isian formulir?")) {
-                localStorage.removeItem('ma_alqomariyah_form_data');
-                fields.forEach(id => {
-                    const el = document.getElementById(id);
-                    if (el) el.value = '';
-                });
-                document.querySelectorAll('input[name="q2"]').forEach(radio => radio.checked = false);
-                
-                const dateInput = document.getElementById('submissionDate');
-                if (dateInput) dateInput.value = new Date().toISOString().split('T')[0];
+            const modal = document.getElementById('resetModal');
+            if (modal) modal.classList.remove('hidden');
+        }
 
-                updateProgress();
-                showToast("Formulir telah direset", "fa-rotate-right");
-            }
+        function closeResetModal() {
+            const modal = document.getElementById('resetModal');
+            if (modal) modal.classList.add('hidden');
+        }
+
+        function confirmResetForm() {
+            closeResetModal();
+            localStorage.removeItem('ma_alqomariyah_form_data');
+            fields.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.value = '';
+            });
+            document.querySelectorAll('input[name="q2"]').forEach(radio => radio.checked = false);
+            
+            const dateInput = document.getElementById('submissionDate');
+            if (dateInput) dateInput.value = new Date().toISOString().split('T')[0];
+
+            updateProgress();
+            showToast("Formulir telah direset", "fa-rotate-right");
         }
 
         function saveScriptUrl() {
@@ -419,7 +563,7 @@
             }
         }
 
-        function openSummaryModal() {
+        async function openSummaryModal() {
             const modal = document.getElementById('summaryModal');
             const container = document.getElementById('summaryContent');
             if (!modal || !container) return;
@@ -438,7 +582,71 @@
             const q7b = document.getElementById('q7_reason')?.value || '...';
 
             container.innerHTML = `
-                <div class="bg-slate-50 p-4 rounded-xl border border-slate-200 mb-4">
+                <div class="text-center py-8">
+                    <i class="fa-solid fa-spinner fa-spin text-3xl text-emerald-600 mb-2"></i>
+                    <p class="text-sm font-medium text-slate-600">Menganalisis Tingkat Berpikir Kritis dengan AI...</p>
+                </div>
+            `;
+            modal.classList.remove('hidden');
+
+            const payloadData = { studentName: name, studentClass, submissionDate: date, q1, q2, q3, q4, q5, q6, q7_action: q7a, q7_reason: q7b };
+            lastEvaluationResult = await evaluateCriticalThinking(payloadData);
+
+            const evalRes = lastEvaluationResult;
+            const isEmerald = evalRes.statusColor === 'emerald';
+            const isSky = evalRes.statusColor === 'sky';
+            const badgeBg = isEmerald ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : isSky ? 'bg-sky-100 text-sky-800 border-sky-300' : 'bg-amber-100 text-amber-800 border-amber-300';
+            const cardBg = isEmerald ? 'bg-emerald-50 border-emerald-200' : isSky ? 'bg-sky-50 border-sky-200' : 'bg-amber-50 border-amber-200';
+
+            container.innerHTML = `
+                <!-- Critical Thinking Assessment Result Card -->
+                <div class="p-5 rounded-2xl border ${cardBg} shadow-sm space-y-4">
+                    <div class="flex items-center justify-between flex-wrap gap-2 border-b border-slate-200/60 pb-3">
+                        <div class="flex items-center space-x-2">
+                            <span class="p-2 rounded-xl bg-white shadow-sm text-lg text-emerald-600">
+                                <i class="fa-solid ${evalRes.statusIcon}"></i>
+                            </span>
+                            <div>
+                                <h4 class="font-bold text-slate-900 text-base">Hasil Evaluasi Berpikir Kritis</h4>
+                                <p class="text-xs text-slate-500">Analisis Otomatis Jawaban Siswa</p>
+                            </div>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <span class="text-xs uppercase tracking-wider text-slate-500 font-semibold">Skor Akhir:</span>
+                            <span class="px-3 py-1 rounded-full border text-xs font-bold ${badgeBg}">
+                                ${evalRes.score} / 100 • ${evalRes.category}
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- Rubric Breakdown -->
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-center text-xs">
+                        <div class="bg-white p-2.5 rounded-xl border border-slate-200/80">
+                            <span class="block text-slate-400 font-medium">1. Identifikasi</span>
+                            <span class="font-bold text-slate-800 text-sm">${evalRes.rubric.identifikasi} / 25</span>
+                        </div>
+                        <div class="bg-white p-2.5 rounded-xl border border-slate-200/80">
+                            <span class="block text-slate-400 font-medium">2. Argumentasi</span>
+                            <span class="font-bold text-slate-800 text-sm">${evalRes.rubric.argumentasi} / 25</span>
+                        </div>
+                        <div class="bg-white p-2.5 rounded-xl border border-slate-200/80">
+                            <span class="block text-slate-400 font-medium">3. Solusi & Dampak</span>
+                            <span class="font-bold text-slate-800 text-sm">${evalRes.rubric.solusi} / 25</span>
+                        </div>
+                        <div class="bg-white p-2.5 rounded-xl border border-slate-200/80">
+                            <span class="block text-slate-400 font-medium">4. Sintesis</span>
+                            <span class="font-bold text-slate-800 text-sm">${evalRes.rubric.sintesis} / 25</span>
+                        </div>
+                    </div>
+
+                    <div class="bg-white p-3 rounded-xl border border-slate-200/80 text-xs space-y-1.5">
+                        <p class="text-slate-800 font-medium"><i class="fa-solid fa-circle-check text-emerald-600 mr-1"></i> ${evalRes.verdict}</p>
+                        <p class="text-slate-600"><strong>Kelebihan:</strong> ${evalRes.strengths}</p>
+                        <p class="text-slate-600"><strong>Saran Pengembangan:</strong> ${evalRes.suggestions}</p>
+                    </div>
+                </div>
+
+                <div class="bg-slate-50 p-4 rounded-xl border border-slate-200">
                     <h4 class="font-bold text-slate-900 border-b pb-2 mb-2">Identitas Siswa</h4>
                     <p><strong>Nama:</strong> ${name}</p>
                     <p><strong>Kelas:</strong> ${studentClass}</p>
@@ -476,8 +684,6 @@
                     </div>
                 </div>
             `;
-
-            modal.classList.remove('hidden');
         }
 
         function closeSummaryModal() {
@@ -506,6 +712,9 @@
                 studentName: name,
                 studentClass: document.getElementById('studentClass').value || '-',
                 submissionDate: document.getElementById('submissionDate').value || '-',
+                score: lastEvaluationResult ? lastEvaluationResult.score : '-',
+                category: lastEvaluationResult ? lastEvaluationResult.category : '-',
+                feedback: lastEvaluationResult ? lastEvaluationResult.verdict : '-',
                 q1: document.getElementById('q1').value || '-',
                 q2: q2Radio ? q2Radio.value : '-',
                 q3: document.getElementById('q3').value || '-',
@@ -532,7 +741,7 @@
                     body: JSON.stringify(payload)
                 });
 
-                showToast("Jawaban berhasil terkirim ke Google Sheets!", "fa-circle-check");
+                showToast("Jawaban & Nilai terkirim ke Google Sheets!", "fa-circle-check");
             } catch (error) {
                 console.error("Gagal mengirim data:", error);
                 showToast("Terjadi kesalahan saat mengirim jawaban.", "fa-xmark");
@@ -557,6 +766,8 @@
             const q7a = document.getElementById('q7_action').value || '...';
             const q7b = document.getElementById('q7_reason').value || '...';
 
+            const scoreText = lastEvaluationResult ? `*SKOR BERPIKIR KRITIS:* ${lastEvaluationResult.score}/100 (${lastEvaluationResult.category})\n*Catatan Evaluasi:* ${lastEvaluationResult.verdict}\n\n` : '';
+
             const textToCopy = `*LATIHAN BERPIKIR KRITIS TIK XI - MA AL-QOMARIYAH*
 
 *Identitas Siswa:*
@@ -564,7 +775,7 @@ Nama: ${name}
 Kelas: ${studentClass}
 Tanggal: ${date}
 
-1. *Apa masalahnya?*
+${scoreText}1. *Apa masalahnya?*
 ${q1}
 
 2. *Pendapat HP di Sekolah:*
@@ -592,7 +803,7 @@ Menurut saya, penggunaan HP di sekolah sebaiknya ${q7a} karena ${q7b}.`;
             document.execCommand("copy");
             document.body.removeChild(dummy);
 
-            showToast("Jawaban disalin ke clipboard!", "fa-copy");
+            showToast("Jawaban & Nilai disalin ke clipboard!", "fa-copy");
         }
 
         function showToast(message, iconClass = "fa-check-circle") {
